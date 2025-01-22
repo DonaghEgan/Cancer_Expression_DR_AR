@@ -1,0 +1,26 @@
+{
+    "id": "C8EF7013",
+    "path": "Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/WORKING/scripts_v3/deseq_cancer_exp_hmf.R",
+    "project_path": null,
+    "type": "r_source",
+    "hash": "0",
+    "contents": "",
+    "dirty": false,
+    "created": 1737551217426.0,
+    "source_on_save": false,
+    "relative_order": 3,
+    "properties": {
+        "source_window_id": "",
+        "Source": "Source",
+        "cursorPosition": "116,0",
+        "scrollLine": "93"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1736943869,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1736943869,
+    "read_only": false,
+    "read_only_alternatives": []
+}

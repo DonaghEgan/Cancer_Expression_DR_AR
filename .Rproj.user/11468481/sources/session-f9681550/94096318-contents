@@ -1,0 +1,53 @@
+run_deseq_analysis <- function(counts, metadata, min_count,
+                               min_samples, purity_var, comparison,
+                               additional_covariates = c("APC_CELLS", "NON_APC_CELLS", 
+                                                         "Endothelial", "Fibroblasts")) {
+  
+  # Validate inputs
+  if(!all(additional_covariates %in% colnames(metadata))) {
+    stop("Not all additional covariates found in metadata")
+  }
+  if(!purity_var %in% colnames(metadata)) {
+    stop(sprintf("Purity variable '%s' not found in metadata", purity_var))
+  }
+  
+  # Construct design formula
+  covariates_formula <- paste(additional_covariates, collapse = " + ")
+  design_formula <- as.formula(
+    sprintf("~ group + %s + group:%s + %s",
+            purity_var, purity_var, covariates_formula)
+  )
+  
+  message("Using design formula: ", deparse(design_formula))
+  
+  # Create DESeq object
+  dds <- DESeqDataSetFromMatrix(
+    countData = round(counts),
+    colData = metadata,
+    design = design_formula
+  )
+  
+  # Filter low counts
+  keep <- rowSums(counts(dds) >= min_count) > min_samples
+  message("Keeping ", sum(keep), " out of ", length(keep), " genes")
+  dds <- dds[keep,]
+  
+  # Run DESeq
+  dds <- DESeq(dds, quiet = TRUE)
+  
+  # Verify the comparison exists
+  available_comparisons <- resultsNames(dds)
+  if(!comparison %in% available_comparisons) {
+    stop(sprintf("Requested comparison '%s' not found. Available comparisons: %s",
+                 comparison, paste(available_comparisons, collapse = ", ")))
+  }
+  
+  # Get results
+  res <- data.frame(results(dds, name = comparison)) %>%
+    rownames_to_column("gene")
+  
+  return(list(
+    results = res,
+    design = design_formula
+  ))
+}

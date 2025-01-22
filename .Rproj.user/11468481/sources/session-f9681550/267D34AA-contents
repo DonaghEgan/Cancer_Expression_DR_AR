@@ -1,0 +1,441 @@
+library(Seurat)
+library(limma)
+library(fgsea)
+library(tidyverse)
+library(ggsci)
+library(ggpubr)
+library(msigdbr)
+library(ggpubr)
+library(readxl)
+
+deg_hmf <- readRDS("Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/OUTPUT/hmf_deseq_purity_nf_aq_deg.Rds")
+hmf_up <- deg_hmf[deg_hmf$padj < 0.1 & deg_hmf$log2FoldChange > 0,]
+hmf_down <- deg_hmf[deg_hmf$padj < 0.1 & deg_hmf$log2FoldChange < 0,]
+
+# URL of the file on the FTP server
+ftp_url <- "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE115nnn/GSE115978/suppl/GSE115978%5Fcounts.csv.gz"
+
+# Path to save the downloaded file
+local_file <- tempfile(fileext = ".gz")
+
+# Download the file
+download.file(ftp_url, local_file, mode = "wb")
+
+# Path to save the decompressed file
+decompressed_file <- tempfile(fileext = ".csv")
+
+# Decompress the file using the R.utils package
+R.utils::gunzip(local_file, decompressed_file, remove = FALSE)
+
+# Load the data into a data frame
+data <- read.csv(decompressed_file)
+
+# Display the first few rows of the data
+head(data)
+
+# Delete the downloaded and decompressed files
+file.remove(local_file)
+file.remove(decompressed_file)
+
+data <- data %>% column_to_rownames("X")
+
+# cell annotations
+cell_annot <- read_csv("Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/Arnon/GSE115978_cell.annotations.csv")
+
+# patient info
+patient_info <- readxl::read_xlsx("Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/Arnon/1-s2.0-S0092867418311784-mmc1.xlsx", skip = 2)
+
+# format annotations for seurat
+seurat_cell_annot <- cell_annot
+seurat_cell_annot <- merge(patient_info, seurat_cell_annot, by.x = "Sample", by.y= "samples")
+seurat_cell_annot <- seurat_cell_annot %>% column_to_rownames("cells")
+seurat_cell_annot <- seurat_cell_annot[!seurat_cell_annot$`Treatment group` == "OR",]
+seurat_cell_annot <- seurat_cell_annot[seurat_cell_annot$`Treatment group` == "Untreated",]
+seurat_cell_annot <- seurat_cell_annot[!seurat_cell_annot$cell.types == "?",]
+
+# unify meta and counts
+data <- data[,colnames(data) %in% rownames(seurat_cell_annot)]
+
+# create seurat object and normalize
+pbmc <- CreateSeuratObject(counts = data, meta.data = seurat_cell_annot, project = "pbmc3k", min.cells = 10, min.features = 100)
+pbmc <- NormalizeData(pbmc, normalization.method = "LogNormalize", scale.factor = 10000)
+pbmc <- FindVariableFeatures(pbmc, selection.method = "vst", nfeatures = 2000)
+
+#scale
+all.genes <- rownames(pbmc)
+pbmc <- ScaleData(pbmc, features = all.genes)
+
+# Example: Extract expression data for a specific sample and cell type
+sample_id <- "Sample"  # Replace with your sample ID
+celltype1 <- "Mal"  # Replace with your cell type
+celltype2 <- c("T.cell", "T.CD8", "T.CD4")  # Replace with your cell type
+
+# Subset the Seurat object by sample and cell type
+subset_celltype1 <- subset(pbmc, subset = cell.types == celltype1)
+subset_celltype2 <- subset(pbmc, subset = cell.types %in% celltype2)
+
+exprs_sample1_celltype1 <- AverageExpression(subset_celltype1, group.by = sample_id, return.seurat = T, assays = "RNA")
+exprs_sample1_celltype2 <- AverageExpression(subset_celltype2, group.by = sample_id, return.seurat = T, assays = "RNA")
+
+meta_colnames_celltype1 <- rownames(exprs_sample1_celltype1@meta.data)
+meta_colnames_celltype2 <- rownames(exprs_sample1_celltype2@meta.data)
+
+exprs_sample1_celltype2 <- exprs_sample1_celltype2[, colnames(exprs_sample1_celltype2) %in% meta_colnames_celltype1]
+exprs_sample1_celltype1 <- exprs_sample1_celltype1[, colnames(exprs_sample1_celltype1) %in% meta_colnames_celltype2]
+
+# Calculate module scores
+seurat_object <- AddModuleScore(
+  object = exprs_sample1_celltype1,
+  features = list(score =c(hmf_up$gene)),
+  ctrl = 100,  # Number of control genes to use for normalization
+  name = "ModuleScore"  # Prefix for the new metadata columns
+)
+
+# Extract module scores from seurat_object1
+module_scores <- seurat_object@meta.data[ , grep("ModuleScore", colnames(seurat_object@meta.data)), drop = F]
+
+## load immune system genes from reactome
+immune_system <- qusage::read.gmt("C:/Users/egand/Downloads/REACTOME_IMMUNE_SYSTEM.v2024.1.Hs.gmt")
+
+# Extract expression data from seurat_object2
+exprs_data2 <- data.frame(t(GetAssayData(exprs_sample1_celltype2, slot = "data")))
+exprs_data2 <- exprs_data2[,colnames(exprs_data2) %in% immune_system$REACTOME_IMMUNE_SYSTEM, drop = F]
+
+## minimum exp & no 0 values
+plot(density(colSums(exprs_data2)))
+exprs_data2 <- exprs_data2[,colSums(exprs_data2) > 10 & apply(exprs_data2, 2, function(x) sum(x == 0)) < nrow(exprs_data2) ]
+
+# merge with module scores
+exprs_data2 <- merge(module_scores, exprs_data2, by = 0) %>% column_to_rownames("Row.names")
+
+# module score to be correlated
+target_column <- "ModuleScore1"
+
+# Initialize a data frame to store the results
+results <- data.frame(column = character(),
+                      estimate = numeric(),
+                      p_value = numeric(),
+                      stringsAsFactors = FALSE)
+
+# Loop through each column in the data frame
+for (col in colnames(exprs_data2)) {
+  
+  if (col != target_column) {
+    
+    # Perform correlation test
+    test_result <- cor.test(exprs_data2[[target_column]], exprs_data2[[col]], use = "complete.obs")
+    
+    # Append the results to the data frame
+    results <- rbind(results, data.frame(column = col,
+                                         estimate = test_result$estimate,
+                                         p_value = test_result$p.value))
+  }
+}
+
+results$FDR <- p.adjust(results$p_value, method = "BH")
+plot_results <- results %>% arrange(estimate) %>% dplyr::slice(c(1:3, (n()-2):n()))
+plot_results$label <- ifelse(plot_results$FDR < 0.05, "0.05", "non_sig")
+
+# Create the barplot
+pdf("Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/OUTPUT/figures/corcancertcell.pdf", height = 2.5, width = 3.5)
+ggplot(plot_results, aes(x = reorder(column, estimate), y = estimate, fill = label)) +
+  geom_bar(stat = "identity", width = 0.6) +  
+  labs(title = "Correlation Estimates",
+       x = "Gene",
+       y = "Correlation Coefficient") +
+  theme_classic() + coord_flip() +
+  scale_fill_manual(values = c("#33A02C", "grey")) +
+  theme(axis.text.x = element_text(hjust = 1))
+dev.off()
+
+##
+################################################################################
+
+pbmc <- RunPCA(pbmc, features = VariableFeatures(object = pbmc))
+ElbowPlot(pbmc)
+pbmc <- FindNeighbors(pbmc, dims = 1:20)
+pbmc <- FindClusters(pbmc, resolution = 0.3)
+pbmc <- RunUMAP(pbmc, dims = 1:8)
+DimPlot(pbmc, reduction = "umap")
+
+pbmc.markers <- FindAllMarkers(pbmc, only.pos = TRUE)
+pbmc.markers %>%
+  group_by(cluster) %>%
+  dplyr::filter(avg_log2FC > 1)
+
+exp_sub <- FetchData(pbmc, vars = c("ITGB2","IL7R", "CD69"))
+
+p1 <- ggplot(exp_sub, aes(x = ITGB2, y = IL7R)) +
+  geom_point(alpha = 0.4, size = 1) +
+  theme_classic() +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +  
+  stat_cor(method = "pearson", label.x = min(exp_sub$ITGB2), label.y = max(exp_sub$IL7R)) +
+  labs(
+    x = "ITGB2 Expression",
+    y = "IL7R Expression"
+  )
+
+p2 <- ggplot(exp_sub, aes(x = ITGB2, y = CD69)) +
+  geom_point(alpha = 0.4, size  = 1) +
+  theme_classic() +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +  
+  stat_cor(method = "pearson", label.x = min(exp_sub$ITGB2), label.y = max(exp_sub$CD69)) +
+  labs(
+    x = "ITGB2 Expression",
+    y = "CD69 Expression"
+  )
+
+combined_plot <- p1 + p2 + 
+  plot_layout(ncol = 2)
+
+pdf("Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/OUTPUT/figures/cor_itgb2_mem.pdf", height = 2.5, width = 5)
+combined_plot
+dev.off()
+
+## cancer cells
+################################################################################
+
+msigdbr_df <- msigdbr(species = "human", category = "H")
+msigdbr_df_r <- msigdbr(species = "human", category = "C2")
+
+pathways_R = split(x = msigdbr_df_r$gene_symbol, f = msigdbr_df_r$gs_name)
+pathways_H = split(x = msigdbr_df$gene_symbol, f = msigdbr_df$gs_name)
+
+test <- read_xlsx("C:/Users/egand/Downloads/aad0501_table_s7.xlsx", col_names = F)
+
+# Calculate module scores
+seurat_score <- AddModuleScore(
+  object = subset_celltype1,
+  features = list(mhc = c(pathways_R[["REACTOME_MHC_CLASS_II_ANTIGEN_PRESENTATION"]]),
+                  ifng = c(pathways_H[["HALLMARK_INTERFERON_GAMMA_RESPONSE"]]),
+                  dr_sig = c(hmf_up$gene),
+                  mitf = c(test$...1),
+                  axl = c(test$...2),
+                  myc = c(pathways_H[["HALLMARK_MYC_TARGETS_V1"]]),
+                  ar_sig = c(hmf_down$gene)),
+  ctrl = 300,  
+  name = "path_Score"  
+)
+
+library(sjPlot)
+library(sjmisc)
+library(interactions)
+
+lm_unc <- lm(path_Score1 ~ path_Score2, seurat_score@meta.data)
+seurat_score@meta.data$ratio_mhc_ifng <- residuals(lm_unc)
+
+lm_axl <- lm(path_Score4 ~ path_Score5, seurat_score@meta.data)
+seurat_score@meta.data$ratio_mitf_axl <- residuals(lm_axl)
+test <- lm(ratio_mhc_ifng ~ ratio_mitf_axl*path_Score3, data = seurat_score@meta.data)
+summary(test)
+
+test <- lm(ratio_mhc_ifng ~ path_Score4*path_Score3, data = seurat_score@meta.data)
+summary(test)
+
+################################################################################
+
+pdf("Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/OUTPUT/figures/DRsig_resid_mhc_ifng.pdf", height = 2, width = 3)
+interact_plot(model = test, pred = path_Score4, modx = path_Score3, line.thickness = 0.5, plot.points = T, point.size = 0.8, point.alpha = 0.08) +
+  theme_classic() + xlab("MITF Activity") + ylab("MHC CLASS II:IFNG") 
+dev.off()
+
+interact_plot(model = test, pred = path_Score2, modx = path_Score3, line.thickness = 0.5, plot.points = T, point.size = 0.8, point.alpha = 0.08) +
+  theme_classic() + xlab("MITF:AXL") + ylab("MHC CLASS II:IFNG")
+
+pdf("Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/OUTPUT/figures/dr_sig_axl_mitf.pdf", height = 3, width = 3)
+ggplot(seurat_score@meta.data, aes(x=reorder(group,ratio_axl_mitf), y=ratio_axl_mitf, fill = group)) + geom_boxplot() +
+  stat_compare_means() + theme_classic() + xlab("") + ylab("Ratio AXL:MITF") +
+  theme(legend.position = "none") + scale_fill_manual(values = c("#27ae60", "#e74c3c"))
+dev.off()
+
+################################################################################
+
+# Load necessary libraries
+library(ggplot2)
+library(gratia)
+library(mgcv)
+library(RColorBrewer)
+
+sc_counts <- seurat_score@assays[["RNA"]]@counts %>% data.frame() %>% t()
+sc_counts <- log2(sc_counts + 1)
+
+
+# Fit a GAM model with a spline for MITF, adjusting the number of knots
+model <- gam(MYC ~ s(MITF), family = nb(), data = data.frame(sc_counts))
+summary(model)
+
+# Create a new data frame for the prediction
+new_data <- data.frame(MITF = seq(min(data.frame(sc_counts)$MITF), max(data.frame(sc_counts)$MITF), length.out = 200))
+
+# Predict fitted values and standard errors
+new_data$fit <- predict(model, newdata = new_data, type = "response")
+new_data$se <- predict(model, newdata = new_data, type = "response", se.fit = TRUE)$se.fit
+
+# Calculate the first derivative of the smooth term
+# Use `predict` with the derivative option
+first_derivative <- predict(model, newdata = new_data, type = "terms", se.fit = TRUE)$fit[, 1] 
+# Note: Adjust if your model has more smooth terms.
+
+# Add first derivative to the new data frame
+new_data$first_derivative <- c(NA, diff(new_data$fit) / diff(new_data$MITF))  # Numerical derivative
+
+# Create a ggplot in the style of plotSmoothers with cell-level data
+pdf("Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/OUTPUT/figures/myc_mitf_correlation.pdf", height = 3, width = 3)
+
+ggplot() +
+  
+  # Add raw single-cell data points
+  geom_point(data = sc_counts, aes(x = MITF, y = MYC), color = "black", size = 0.5, alpha = 0.3) +
+  
+  # Add confidence interval ribbon
+  geom_ribbon(data = new_data, aes(x = MITF, ymin = fit - 1.96 * se, ymax = fit + 1.96 * se), 
+              fill = "grey", alpha = 0.3) +
+  
+  # Add the smooth line with color representing the first derivative
+  geom_line(data = new_data, aes(x = MITF, y = fit, color = first_derivative), size = 1) +
+  
+  # Use a color gradient for the first derivative
+  scale_color_gradientn(colors = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(100),
+                        name = "First Derivative") +
+  
+  # Labels and theme
+  labs(x = "MITF Expression", y = "MYC Expression") +
+  theme_classic() +
+  theme(legend.title = element_text(size = 8),
+        legend.text = element_text(size = 6),
+        legend.key.height = unit(0.2, "cm"),
+        legend.key.width = unit(0.4, "cm"),
+        legend.position = "top", 
+        axis.text = element_text(size = 8))
+
+dev.off()
+
+################################################################################
+
+cell_types_tisch <- read_tsv("C:/Users/egand/Downloads/SKCM_GSE115978_aPD1_CellMetainfo_table.tsv")
+cell_type_stroma <- cell_types_tisch[cell_types_tisch$`Celltype (minor-lineage)` %in% c("CD4Tn", "CD8Tex", "Tprolif"),]
+
+# Calculate average module scores per tumor sample
+averaged_scores <- seurat_score@meta.data %>%
+  group_by(Sample) %>%  # Replace 'orig.ident' with your tumor sample identifier column if different
+  summarise(across(starts_with("path_Score"), mean, na.rm = TRUE))
+
+# Calculate proportions within each sample
+proportions <- cell_type_stroma %>%
+  group_by(Patient, `Celltype (minor-lineage)`) %>%
+  plotly::summarise(Count = n()) %>%
+  mutate(proportion = Count / sum(Count))
+
+score_prop <- merge(averaged_scores, proportions, by.x = "Sample", by.y = "Patient")
+
+# Calculate correlations by cell type
+correlation_results <- score_prop %>%
+  group_by(`Celltype (minor-lineage)`) %>%
+  summarise(
+    correlation = cor(proportion, path_Score3, method = "spearman", use = "complete.obs"),
+    p_value = cor.test(proportion, path_Score3, method = "spearman", use = "complete.obs")$p.value
+  )
+
+correlation_results$padj <- p.adjust(correlation_results$p_value)
+
+################################################################################
+
+subset_celltype1 <- RunPCA(subset_celltype1, verbose = FALSE)
+subset_celltype1 <- RunUMAP(subset_celltype1, dims = 1:10)
+
+bad_ifng <- read_delim("Z:/working/GEL_MELANOMA/IFN_signatures/AR_IFNG_GENES_OVERLAP_3.txt", delim = "\t", col_names = F)
+
+seurat_score <- AddModuleScore(
+  object = subset_celltype1,
+  features = list(
+    mhc = pathways_R[["REACTOME_MHC_CLASS_II_ANTIGEN_PRESENTATION"]],
+    ifng = pathways_H[["HALLMARK_INTERFERON_GAMMA_RESPONSE"]],
+    dr_sig = c(hmf_up$gene),
+    bad_ifng = bad_ifng$X1
+  ),
+  ctrl = 300,  
+  name = "path_Score"
+)
+
+# Step 2: Extract scores from metadata
+module_scores <- seurat_score@meta.data[, grep("path_Score", colnames(seurat_score@meta.data))]
+
+# Step 3: Binarize each score based on its median
+binarized_scores <- as.data.frame(apply(module_scores, 2, function(x) {
+  ifelse(x > quantile(x, 0.50, na.rm = TRUE), 1, 0)
+}))
+
+# Step 4: Assign proper column names to the binarized scores
+colnames(binarized_scores) <- paste0(colnames(module_scores), "_binary")
+
+# Step 5: Add the binarized scores back to the metadata
+seurat_score <- AddMetaData(seurat_score, metadata = binarized_scores)
+
+# First plot: UMAP with path_Score1 and path_Score2
+plot1 <- FeaturePlot(seurat_score, features = c("path_Score1_binary", "path_Score2_binary"), reduction = "umap", 
+                     pt.size = 0.6) +
+  theme_classic()
+
+# Second plot: UMAP with samples
+Idents(seurat_score) <- "Sample"
+plot2 <- FeaturePlot(seurat_score, features = c("Sample"), reduction = "umap", pt.size = 0.6, label = T) +
+  theme_classic() + 
+  scale_color_discrete() +
+  theme(legend.position = "bottom")
+
+# Combine the plots
+combined_plot <- plot1 + plot2
+
+# Display the combined plot
+pdf("Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/OUTPUT/figures/high_MHC_lowifng_pheno.pdf", height = 8, width = 8)
+combined_plot
+dev.off()
+
+
+cell_prop <- data.frame(table(pbmc@meta.data$Sample, pbmc@meta.data$cell.types))
+# Calculate proportions within each sample
+proportions <- seurat_cell_annot %>%
+  group_by(Sample, cell.types) %>%
+  plotly::summarise(Count = n()) %>%
+  mutate(proportion = Count / sum(Count))
+
+# Create the stacked bar chart
+ggplot(proportions, aes(x = Sample, y = proportion, fill = cell.types)) +
+  geom_bar(stat = "identity") +
+  labs(
+    title = "Proportion of Each Cell Type in Every Sample",
+    x = "Sample",
+    y = "Proportion"
+  ) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  theme_minimal() +
+  theme(legend.title = element_text(face = "bold"), legend.position = "top")
+
+
+# Alternatively, if comparing all samples at once
+Idents(subset_celltype2) <- "Sample"
+all_markers <- FindAllMarkers(
+  subset_celltype2,
+  only.pos = TRUE,      # Return only positive markers
+  test.use = "wilcox"   # Default test
+)
+mel_80 <- all_markers[all_markers$cluster == "Mel80",]
+
+mem_score <- AddModuleScore(
+  object = exprs_sample1_celltype2,
+  features = list(c(sade_list$mem_tcell)
+  ),
+  ctrl = 300,  
+  name = "path_Score"
+)
+
+dr_score <- AddModuleScore(
+  object = exprs_sample1_celltype1,
+  features = list(hmf_up$gene
+  ),
+  ctrl = 300,  
+  name = "path_Score"
+)
+
+test <- merge(dr_score@meta.data, mem_score@meta.data, by = 0)
+ggscatter(test, x="path_Score1.x", y = "path_Score1.y", cor.coef = T)

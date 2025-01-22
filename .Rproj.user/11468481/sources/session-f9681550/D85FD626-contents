@@ -1,0 +1,314 @@
+## library
+library(DESeq2); library(tidyverse); library(msigdbr); library(fgsea);library(pheatmap)
+library(RColorBrewer); library(ggsci); library(ggpubr); library(biomaRt)
+library(openxlsx)
+
+pal_colors <- rev(pal_npg()(3)[c(2,1,3)])
+
+## load data
+counts <- read_delim("Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/liu/mel_dfci_2019/rnaseq_rawcounts.txt")
+counts <- counts %>% column_to_rownames("...1")
+meta_data <- readRDS( "Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/OUTPUT/liu_meta_data.Rds")
+TME_liu <- data.frame(t(readRDS("Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/OUTPUT/tme_liu.Rds")))
+
+## subset counts according to meta data
+counts <- counts[,colnames(counts) %in% meta_data$PATIENT_ID]
+
+## collapse covariates - immune cells  
+APC_CELLS <- c("Dendritic_cells" , "Monocytes","B_cells",
+               "Macrophages",  "Macrophages_M1", "Macrophages_M2")
+
+NON_APC_CELLS <- c("Cytotoxic_cells", "Eosinophils", "Mast_cells", "NK_cells","Neutrophils",
+                   "T_cells_CD4", "T_cells_CD8", "T_cells_gamma_delta", "T_regulatory_cells",
+                   "Plasma_cells")
+
+TME_liu$APC_CELLS <- rowMeans(TME_liu[, APC_CELLS, drop=FALSE]) 
+TME_liu$NON_APC_CELLS <- rowMeans(TME_liu[, NON_APC_CELLS, drop = FALSE]) 
+
+## merge meta and tme
+meta_tme <- merge(TME_liu, meta_data, by.x = 0, by.y="SAMPLE_ID") %>% column_to_rownames("PATIENT_ID")
+meta_tme$group <- as.factor(meta_tme$group) # group as factor 
+
+## unify order of patients 
+patient_order <- rownames(meta_tme)
+counts_order <- counts[, patient_order]
+
+## scale model covariates 
+meta_tme_scale <- scale(meta_tme[,c(2:22,32), drop=F])
+meta_tme_scale <- merge(meta_tme_scale, meta_tme[,"group", drop =F], by =0) %>% column_to_rownames("Row.names")
+
+## create deseq object with model design
+dds <- DESeqDataSetFromMatrix(countData = round(counts_order),
+                              colData = meta_tme_scale,
+                              design = ~ group + PURITY + group:PURITY + APC_CELLS + NON_APC_CELLS + Endothelial + Fibroblasts)
+
+## filtering 
+keep <- rowSums(counts(dds) > 5) > 15
+table(keep)
+dds <- dds[keep,]
+
+## run comparison  
+dds <- DESeq(dds, quiet = T)
+resultsNames(dds)
+
+## extract differences between NF and AR
+res_liu <- data.frame(results(dds, name="groupNofailure.PURITY"))
+res_liu$gene <- rownames(res_liu)
+
+## save
+saveRDS(res_liu,"Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/OUTPUT/liu_deseq_purity_nf_aq_deg.Rds")
+res_liu <- readRDS("Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/OUTPUT/liu_deseq_purity_nf_aq_deg.Rds")
+
+## volcano plot data set up 
+volcano_data <- data.frame(row.names = rownames(res_liu),
+                           logFC = res_liu$log2FoldChange,
+                           negLogPadj = -log10(res_liu$padj))
+subset_data <- subset(volcano_data, negLogPadj > -log10(0.1))
+threshold <- 1.0
+
+## plot volcano plot
+pdf("Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/OUTPUT/volcano_plot_deseq2.pdf", height = 4, width = 4)
+ggplot(volcano_data, aes(x = logFC, y = negLogPadj)) +
+  geom_point(color = ifelse(abs(volcano_data$logFC) > threshold & volcano_data$negLogPadj > -log10(0.25), "red", "grey")) +
+  xlim(c(-max(abs(volcano_data$logFC)), max(abs(volcano_data$logFC)))) +
+  ylim(c(0, max(-log10(res_liu$padj)))) +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "red") +
+  geom_hline(yintercept = -log10(0.25), linetype = "dashed", color = "red") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "red") +
+  geom_text(data = subset_data, aes(label = rownames(subset_data)),
+            hjust = 1, vjust = -0.4, size = 2.5, color = "black", check_overlap = T) +
+  labs(x = "Log2 Fold Change", y = "-log10(Adjusted p-value)", title = "NF vs AR") +
+  theme_bw()
+dev.off()
+
+## create msigdb objects
+msigdb_reactome <- msigdbr(species = "human", category = "C2", subcategory = "CP:REACTOME")
+
+## create msigdb objects
+#msigdb_reactome <- msigdbr(species = "human", category = "C3", subcategory = "TFT:GTRD")
+#msigdb_reactome <- msigdb_reactome[grepl(c("REACTOME"), msigdb_reactome$gs_name),] # reactome
+
+msigdb_H <- msigdbr(species = "human", category = "H") # hallmarks
+
+## create pathways 
+pathways_R <- split(x = msigdb_reactome$gene_symbol, f = msigdb_reactome$gs_name)
+pathways_H <- split(x = msigdb_H$gene_symbol, f = msigdb_H$gs_name)
+
+## pull genes
+genes <- res_liu %>% pull(stat, gene) %>% sort(decreasing = T)
+
+## pathway enrichment
+fgsea_R_nf_ar <- fgsea::fgseaSimple(pathways = pathways_R, stats = genes, nperm = 100000)
+fgsea_H_nf_ar_liu <- fgsea::fgseaSimple(pathways = pathways_H, stats = genes, nperm = 100000)
+
+## leading edge ifng
+saveRDS(fgsea_H_nf_ar, "Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/OUTPUT/fgsea_liu_H_cancer.Rds")
+saveRDS(fgsea_R_nf_ar, "Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/OUTPUT/fgsea_liu_R_cancer.Rds")
+
+## significant only
+fgsea_R_nf_ar <- fgsea_R_nf_ar[fgsea_R_nf_ar$padj < 0.1, ]
+fgsea_H_nf_ar <- fgsea_H_nf_ar[fgsea_H_nf_ar$padj < 0.1, ]
+
+# format 
+fgsea_H_nf_ar$type <- "NFvsAR"
+fgsea_R_nf_ar$type <- "NFvsAR"
+
+################################################################################
+## pr vs ar and nf ####
+################################################################################
+
+## relevel pr for comparison
+meta_tme_scale$group <- as.factor(meta_tme_scale$group)
+meta_tme_scale$group <- relevel(meta_tme_scale$group, ref = "Primary_Resistance")
+
+## create deseq object with model design
+dds <- DESeqDataSetFromMatrix(countData = round(counts_order),
+                              colData = meta_tme_scale,
+                              design = ~ group + PURITY + group:PURITY + APC_CELLS + NON_APC_CELLS + Endothelial + Fibroblasts)
+## filtering low counts
+keep <- rowSums(counts(dds) > 5) > 15
+dds <- dds[keep,]
+table(keep)
+
+## run comparison  
+dds <- DESeq(dds, quiet =TRUE)
+resultsNames(dds)
+
+## extract results - AR vs PR
+res_ar_pr_liu <- data.frame(results(dds, name = "groupAcq_Resistance.PURITY")) # comparing no failure interaction term in ar interaction term
+res_ar_pr_liu$gene <- rownames(res_ar_pr_liu)
+
+## pull genes
+genes <- res_ar_pr_liu %>% pull(stat, gene) %>% sort(decreasing = T)
+
+## pathway enrichment
+fgsea_R_ar_pr_liu <- fgsea::fgseaSimple(pathways = pathways_R, stats = genes, nperm = 10000)
+fgsea_H_ar_pr_liu <- fgsea::fgseaSimple(pathways = pathways_H, stats = genes, nperm = 10000)
+
+## significant only
+fgsea_R_ar_pr <- fgsea_R_ar_pr[fgsea_R_ar_pr$padj < 0.1, ]
+fgsea_H_ar_pr <- fgsea_H_ar_pr[fgsea_H_ar_pr$padj < 0.1, ]
+
+# format 
+fgsea_H_ar_pr$type <- "ARvsPR"
+fgsea_R_ar_pr$type <- "ARvsPR"
+
+## extract results - NF vs PR
+res_nf_pr_liu <- data.frame(results(dds, name = "groupNofailure.PURITY")) # comparing no failure interaction term in ar interaction term
+res_nf_pr_liu$gene <- rownames(res_nf_pr_liu)
+
+## pull genes
+genes <- res_nf_pr_liu %>% pull(stat, gene) %>% sort(decreasing = T)
+
+## pathway enrichment
+fgsea_R_nf_pr <- fgsea::fgseaSimple(pathways = pathways_R, stats = genes, nperm = 10000)
+fgsea_H_nf_pr_liu <- fgsea::fgseaSimple(pathways = pathways_H, stats = genes, nperm = 10000)
+
+## significant only
+fgsea_R_nf_pr <- fgsea_R_nf_pr[fgsea_R_nf_pr$padj < 0.1, ]
+fgsea_H_nf_pr <- fgsea_H_nf_pr[fgsea_H_nf_pr$padj < 0.1, ]
+
+# format 
+fgsea_H_nf_pr$type <- "NFvsPR"
+fgsea_R_nf_pr$type <- "NFvsPR"
+
+################################################################################
+## combine results and plot
+################################################################################
+
+fgsea_res_H <- do.call(rbind, list(fgsea_H_nf_ar, fgsea_H_nf_pr, fgsea_H_ar_pr))
+colnames(fgsea_res_H)
+fgsea_res_H <- fgsea_res_H[,c("pathway","NES","type")]
+data_wide =  spread(fgsea_res_H, type, NES)
+data_wide <- column_to_rownames(data_wide,"pathway")
+rownames(data_wide) <- gsub("HALLMARK_", "", rownames(data_wide))
+data_wide <-  data_wide[order(-data_wide$ARvsPR), ]
+
+saveRDS(fgsea_res_H,"Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/OUTPUT/fgsea_H_groups_comparison_liu.Rds")
+
+
+pheatmap(as.matrix(data_wide), cluster_rows = F, cluster_cols = T, 
+         color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(100),
+         #filename = "Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/OUTPUT/figures/path_enrich_std_hmf_deseq2.pdf",
+         treeheight_col = 0, cutree_cols = 3, treeheight_row = 10,
+         height = 5, width = 5)
+
+################################################################################
+## intersect infg response genes - leading edge
+################################################################################
+
+library(VennDiagram)
+
+# Determine the maximum length
+max_length <- max(length(fgsea_H_nf_ar$leadingEdge[[27]]), length(fgsea_H_nf_ar_liu$leadingEdge[[27]]))
+
+# Create vectors with NA values to match the maximum length
+extended_vector1 <- c(fgsea_H_nf_ar$leadingEdge[[27]], rep(NA, max_length - length(fgsea_H_nf_ar$leadingEdge[[27]])))
+extended_vector2 <- c( fgsea_H_nf_ar_liu$leadingEdge[[27]], rep(NA, max_length - length(fgsea_H_nf_ar_liu$leadingEdge[[27]])))
+common_genes <- intersect(fgsea_H_nf_ar$leadingEdge[[27]],fgsea_H_nf_ar_liu$leadingEdge[[27]])
+common_extended <- c( common_genes, rep(NA, max_length - length(common_genes)))
+
+# Create a dataframe
+df <- data.frame(Leading_Edge_HMF = extended_vector1, 
+                 Leading_Edge_Liu = extended_vector2,
+                 Common_Genes = common_extended)
+
+write_csv(df, "Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/OUTPUT/infg_pathway_liu_hm.csv")
+
+#Define your two gene sets as character vectors
+gene_set1 <- c(fgsea_H_nf_ar$leadingEdge[[27]])
+gene_set2 <- c(fgsea_H_nf_ar_liu$leadingEdge[[27]])
+
+# Create a list of the gene sets
+gene_sets <- list(
+  Set1 = gene_set1,
+  Set2 = gene_set2
+)
+
+# Create the Venn diagram
+venn.plot <- venn.diagram(
+  x = gene_sets,
+  category.names = c("HMF IFNG", "LIU INFG"),
+  filename = NULL,
+  fill = pal_npg()(10)[4:5]# To display the plot in R
+)
+
+# Plot the Venn diagram
+pdf("Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/OUTPUT/venn_plot_infg.pdf", height = 4, width = 4)
+grid.draw(venn.plot)
+dev.off()
+
+################################################################################
+
+meta_data$log_tmb <- log10(meta_data$NONSYNONYMOUS_MUTATION_COUNT)
+meta_data$group <- factor(meta_data$group, levels = c("Primary_Resistance", "Acq_Resistance", "Nofailure"))
+
+pdf("Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/OUTPUT/figures/tmb_groups_liu.pdf", height = 3, width = 3)
+ggplot(meta_data, aes(x=group, y = log_tmb, fill = group)) + geom_boxplot() + 
+  stat_compare_means(comparisons = comp) + theme_classic() + 
+  scale_fill_manual(values = pal_colors) + theme(legend.position = "none") + ylab("Log10(TMB)") + xlab("") +
+  scale_x_discrete(labels=c("Primary Res","Acquired Res","Durable Rsp"))
+dev.off()
+
+################################################################################
+
+meta_data$p_clonal <- meta_data$MUTS_CLONAL / (meta_data$TOTAL_MUTATIONS)
+meta_data$p_subclonal <- meta_data$MUTS_SUBCLONAL / (meta_data$TOTAL_MUTATIONS)
+
+comp <- list(c("Acq_Resistance", "Nofailure"), c("Acq_Resistance", "Primary_Resistance"), c("Nofailure", "Primary_Resistance"))
+
+pdf("Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/OUTPUT/figures/prop_clonal_liu.pdf", height = 3, width = 4)
+ggplot(meta_data, aes(x = reorder(group, p_clonal, mean), y = p_clonal, color = group)) + 
+  geom_point(position=position_jitter(width = 0.1), alpha = 0.5) +  # Adding jittered points for visibility
+  theme_classic() + 
+  ylab("Proportion Clonal") + 
+  theme() +
+  stat_compare_means(comparisons = comp, method = "t.test") +  stat_summary(
+    geom = "crossbar",
+    fun.y = "mean",
+    col = "black",
+    size = 0.3, width = 0.3) + scale_color_npg() + ggtitle("Liu") + 
+  theme(axis.text.x = element_blank()) + xlab("Group")
+dev.off()
+
+################################################################################
+
+proportions_matrix <- cbind(meta_data$p_clonal, meta_data$p_subclonal)
+
+# Function to calculate Shannon diversity index
+shannon_index <- function(p) {
+  
+  # Calculate Shannon diversity index
+  H <- -sum(p * log2(p))
+  return(H)
+}
+
+meta_data$diversity <- apply(proportions_matrix, 1, shannon_index)
+
+comp <- list(c("Acq_Resistance", "Nofailure"), c("Acq_Resistance", "Primary_Resistance"), c("Nofailure", "Primary_Resistance"))
+
+pdf("Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/OUTPUT/figures/diversity_liu.pdf", height = 3, width = 3)
+ggplot(meta_data, aes(x=group, y = diversity, fill = group)) + geom_boxplot() + 
+  stat_compare_means(comparisons = comp) + theme_classic() + scale_fill_manual(values = pal_colors) +
+  theme(legend.position = "none") + ylab("Shannon Diversity") + xlab("") +
+  scale_x_discrete(labels=c("Primary Res","Acquired Res","Durable Rsp"))
+dev.off()
+
+data_frames <- list(
+  "dr_ar" = fgsea_H_nf_ar_liu,
+  "ar_pr" = fgsea_H_ar_pr_liu,
+  "dr_pr" = fgsea_H_nf_pr_liu
+)
+
+# Create a new workbook
+wb <- createWorkbook()
+
+# Add each data frame to a separate sheet
+for (sheet_name in names(data_frames)) {
+  addWorksheet(wb, sheet_name) # Add a worksheet
+  writeData(wb, sheet_name, data_frames[[sheet_name]]) # Write the data frame
+}
+
+# Save the workbook
+saveWorkbook(wb, "Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/OUTPUT/enriched_pathways_pairwise/liu/gsea_results.xlsx", overwrite = TRUE)
+

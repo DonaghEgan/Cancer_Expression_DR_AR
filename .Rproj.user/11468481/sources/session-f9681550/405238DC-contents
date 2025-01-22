@@ -1,0 +1,3 @@
+consensus_tme <- ConsensusTME::consensusTMEAnalysis(as.matrix(normalised_data),
+                                                    cancerType = "SKCM", statMethod = "ssgsea")
+consensus_tme <- data.frame(t(consensus_tme))
