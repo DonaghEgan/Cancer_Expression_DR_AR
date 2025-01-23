@@ -1,7 +1,8 @@
 run_deseq_analysis <- function(counts, metadata, min_count,
                                min_samples, purity_var, comparison,
                                additional_covariates = c("APC_CELLS", "NON_APC_CELLS", 
-                                                         "Endothelial", "Fibroblasts")) {
+                                                         "Endothelial", "Fibroblasts"),
+                               group_var = "group") {
   
   # Validate inputs
   if(!all(additional_covariates %in% colnames(metadata))) {
@@ -14,8 +15,8 @@ run_deseq_analysis <- function(counts, metadata, min_count,
   # Construct design formula
   covariates_formula <- paste(additional_covariates, collapse = " + ")
   design_formula <- as.formula(
-    sprintf("~ group + %s + group:%s + %s",
-            purity_var, purity_var, covariates_formula)
+    sprintf("~ %s + %s + %s:%s + %s",
+            group_var, purity_var, group_var, purity_var, covariates_formula)
   )
   
   message("Using design formula: ", deparse(design_formula))

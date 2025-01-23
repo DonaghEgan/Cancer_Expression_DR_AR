@@ -12,7 +12,7 @@ source("src/custom_plots.R")
 source("src/analysis_functions.R")
 
 # Load counts + meta
-counts <- readRDS("Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/OUTPUT/counts.Rds") ## available from HMF. 
+counts <- readRDS("insert_path") ## available from the HMF. 
 meta_data <- readRDS("data/meta/meta_data.Rds")
 
 # Overlap counts and meta and remove non-assigned samples

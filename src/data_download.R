@@ -6,7 +6,8 @@
 #' @return Processed data frame
 #' @import tidyverse R.utils
 #' @export
-download_geo_data <- function(ftp_url, rownames_col, cleanup = TRUE) {
+#' 
+download_geo_ftp <- function(ftp_url, rownames_col, cleanup = TRUE) {
   # Validate inputs
   if (!is.character(ftp_url)) {
     stop("ftp_url must be a character string")
@@ -80,4 +81,61 @@ if (FALSE) {  # Set to TRUE to run example
   
   # View the results
   head(geo_data)
+}
+
+# Function to download GEO dataset
+download_geo_direct <- function(gse_id) {
+  tryCatch({
+    gse <- getGEO(gse_id, GSEMatrix = TRUE)
+    return(gse)
+  }, error = function(e) {
+    stop(paste("Error downloading GEO dataset:", e$message))
+  })
+}
+
+# Function to extract raw tar data files
+extract_tar_files <- function(tar_file) {
+  # Create a temporary directory for extraction
+  temp_dir <- tempdir()
+  
+  tryCatch({
+    # Extract files
+    untar(tar_file, exdir = temp_dir)
+    
+    # List extracted files, excluding series files
+    txt_gz_files <- list.files(
+      temp_dir, 
+      pattern = "\\.txt\\.gz$", 
+      full.names = TRUE
+    )
+    txt_gz_files <- txt_gz_files[!grepl("series", basename(txt_gz_files), ignore.case = TRUE)]
+    
+    return(list(temp_dir = temp_dir, files = txt_gz_files))
+  }, error = function(e) {
+    stop(paste("Error extracting files:", e$message))
+  })
+}
+
+# Function to process gsm sample files
+process_sample_files <- function(files) {
+  data_list <- list()
+  
+  for (file in files) {
+    tryCatch({
+      # Extract GSM code from filename
+      gsm_code <- sub(".*(GSM\\d+).*", "\\1", file)
+      
+      # Read compressed file
+      data <- read.table(gzfile(file), header = TRUE)
+      
+      # Rename second column with GSM code
+      colnames(data)[2] <- gsm_code
+      
+      data_list[[gsm_code]] <- data
+    }, error = function(e) {
+      warning(paste("Error processing file", file, ":", e$message))
+    })
+  }
+  
+  return(data_list)
 }

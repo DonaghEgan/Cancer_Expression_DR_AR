@@ -13,3 +13,19 @@ custom_volcano_plot <- function(volcano_data, subset_data, fc_threshold, padj_th
     labs(x = "Log2 Fold Change", y = "-log10(Adjusted p-value)", title = title) +
     theme_bw()
 }
+
+# Define a reusable function for plotting
+plot_boxplot <- function(data, y_var, y_label, comparisons, x_labels) {
+  ggplot(data, aes(x = Subtype, y = !!sym(y_var), fill = Subtype)) + 
+    geom_boxplot(alpha = 0.8) + 
+    labs(x = "", y = y_label) + 
+    theme_classic() + 
+    scale_x_discrete(labels = x_labels) +
+    scale_fill_npg() +
+    stat_compare_means(label = "p.signif", comparisons = comparisons, size = 2.5) + 
+    theme(legend.key.size = unit(0.3, "cm"), 
+          axis.title.y = element_text(size = 9),
+          axis.text.x = element_text(size = 9),
+          legend.text = element_text(size = 8),
+          legend.title = element_text(size = 8))
+}

@@ -23,7 +23,7 @@ immune_genes <- qusage::read.gmt("data/processed/REACTOME_IMMUNE_SYSTEM.v2024.1.
 data_path <- "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE115nnn/GSE115978/suppl/GSE115978%5Fcounts.csv.gz"
 
 # Clean - removes after download 
-sc_data <- download_geo_data(ftp_url = data_path, rownames_col = "X", cleanup = TRUE)
+sc_data <- download_geo_ftp(ftp_url = data_path, rownames_col = "X", cleanup = TRUE)
 
 # Load cell and patient info 
 cell_annot <- read_csv("data/meta/GSE115978_cell.annotations.csv")
