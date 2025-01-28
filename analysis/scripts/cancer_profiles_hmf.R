@@ -45,8 +45,8 @@ meta_tme_scale <- scale(meta_tme[,c(1:21,48), drop=F])
 meta_tme_scale <- merge(meta_tme_scale, meta_tme[,"group", drop =F], by = 0) %>% column_to_rownames("Row.names")
 
 # Run deseq analysis
-result <- run_deseq_analysis(counts, meta_tme_scale, min_count = 10,
-                             min_samples = 40, comparison = "groupNofailure.tumorPurity",
+result <- run_deseq_analysis(counts, meta_tme_scale, min_count = 4,
+                             min_samples = 60, comparison = "groupNofailure.tumorPurity",
                              purity_var = "tumorPurity")
 
 # Create msigdb objects - Reactome

@@ -152,3 +152,26 @@ seurat_wrapper <- function(
     stop("Error in Seurat preprocessing: ", e$message)
   })
 }
+
+# Function to find genes present in all three sets or at least two if count < 10
+find_common_genes <- function(gene_lists) {
+  # Find genes common to all three lists
+  common_all <- Reduce(intersect, gene_lists)
+  
+  # Check if count is less than 10
+  if (length(common_all) < 10) {
+    # Combine all genes from the lists
+    all_genes <- unlist(gene_lists)
+    
+    # Count occurrences of each gene
+    gene_counts <- table(all_genes)
+    
+    # Keep genes that appear in at least two conditions
+    common_at_least_two <- names(gene_counts[gene_counts >= 2])
+    
+    return(common_at_least_two)
+  } else {
+    return(common_all)
+  }
+}
+
