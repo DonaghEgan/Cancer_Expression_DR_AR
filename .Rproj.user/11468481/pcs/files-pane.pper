@@ -1,11 +1,11 @@
 {
     "sortOrder": [
         {
-            "columnIndex": 3,
+            "columnIndex": 4,
             "ascending": false
         },
         {
-            "columnIndex": 4,
+            "columnIndex": 3,
             "ascending": false
         },
         {
@@ -13,5 +13,5 @@
             "ascending": true
         }
     ],
-    "path": "Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/WORKING/scripts"
+    "path": "Z:/working/GEL_MELANOMA/External_Datasets/HMF_GCP/RNA_seq_processed/WORKING/scripts_v3"
 }
