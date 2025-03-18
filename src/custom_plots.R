@@ -15,32 +15,28 @@ custom_volcano_plot <- function(volcano_data, subset_data, fc_threshold, padj_th
 }
 
 # Define a reusable function for plotting
-plot_boxplot <- function(data, x_var, y_var, y_label,
-                         comparisons, x_labels, color_pal) {
+plot_boxplot <- function(data, x_var, y_var, y_label = NULL, x_label = NULL, alpha = NULL, 
+                         comparisons = NULL, color_pal, test_method = "wilcox.test") {
   # Ensure required packages are loaded
   require(ggplot2)
   require(ggpubr)
   require(ggsci) # For scale_fill_npg()
   
-ggplot(data, aes(x = .data[[x_var]], y = .data[[y_var]], fill = .data[[x_var]])) + 
-    geom_boxplot(width = 0.6, alpha = 0.8, outlier.shape = NA) +
-    stat_compare_means(
+  ggplot(data, aes(x = .data[[x_var]], y = .data[[y_var]], fill = .data[[x_var]])) + 
+      geom_boxplot(outlier.shape = NA, alpha = alpha) +
+      stat_compare_means(
       comparisons = comparisons,
-      method = "wilcox.test", # More appropriate for non-normal distributions
+      method = test_method, # More appropriate for non-normal distributions
       label = "p.format", # Show exact p-values instead of symbols
       bracket.size = 0.3,
       tip.length = 0.02,
       step.increase = 0.12,
       size = 3
     ) +
-    scale_x_discrete(
-      labels = x_labels
-    ) +
     scale_fill_manual(values = color_pal) +
     labs(
-      x = "", 
+      x = x_label,
       y = y_label) +
     theme_classic(base_size = 10) +
     theme(legend.position = "none")
 }
-

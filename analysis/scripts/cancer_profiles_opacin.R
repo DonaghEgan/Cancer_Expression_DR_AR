@@ -32,7 +32,11 @@ tryCatch({
 set.seed(123)
 
 # Load counts and meta
-counts <- readRDS("insert_path") # available from source publication
+counts <- readRDS("Z:/working/GEL_MELANOMA/External_Datasets/NKI_OpACIN/WORKING/OUTPUTS/counts.Rds")
+meta_data <- read_csv("Z:/working/GEL_MELANOMA/External_Datasets/NKI_OpACIN/WORKING/OUTPUTS/meta_dataBS.csv")
+colnames(meta_data)
+
+# available from source publication
 meta_data <- read.csv("insert_path")
 meta_data$TumorPerCent <- as.numeric(meta_data$TumorPerCent)
 counts <- counts[,colnames(counts) %in% meta_data$sample] 

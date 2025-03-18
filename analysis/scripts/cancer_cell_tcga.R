@@ -76,27 +76,23 @@ combined_sig <- data.frame(
 # Merge with sample meta data - contains TMB estimates
 sample_meta_sig <- merge(combined_sig, sample_meta, by = "SAMPLE_ID", all.x = TRUE)
 
-# Group by TMB
-sample_meta_sig$tmb_group <- ifelse(
-  sample_meta_sig$TMB_NONSYNONYMOUS < TMB_CUTOFF, "Low", "High"
-)
-
-# Remove NA values for further analysis
-sample_meta_tmb <- sample_meta_tmb %>%
-  filter(tmb_group %in% c("High", "Low"))
-
 # ITH analysis
 # format for merging
-clone_counts <- counts %>%
-  mutate(Patient = gsub("-", ".", Patient))
-
+#clone_counts <- clone_counts %>%
+#  mutate(Patient = gsub("-", ".", Patient))
 clone_counts_sig <- merge(
   clone_counts,
   sample_meta_sig,
   by.x = "Patient",
   by.y = "PATIENT_ID",
-  all.x = TRUE  # Keep all intra_hetero rows if you want
+  all.x = F  # Keep all intra_hetero rows if you want
 )
+
+# Remove Samples with no TMB
+sample_meta_sig <- sample_meta_sig[!is.na(sample_meta_sig$TMB_NONSYNONYMOUS),]
+
+# Group by TMB
+sample_meta_sig$tmb_group <- ifelse(sample_meta_sig$TMB_NONSYNONYMOUS < 10, "Low\n(<10 mut/Mb)", "High\n(>10 mut/Mb)")
 
 # make clones numeric
 clone_counts_sig$clones <- as.numeric(clone_counts_sig$clones)
@@ -112,39 +108,7 @@ hmf_cor <- cor.test(
 rho     <- hmf_cor$estimate
 p_value <- hmf_cor$p.value
 
-# Survival Analysis
-# format for merging
-patient_meta <- gsub("-", ".", patient_meta$PATIENT_ID)
-
-# Merge - only pateints with tmb
-survial_sig <- merge(clone_counts_sig, meta_data, by.x = "Patient",
-  by.y = "PATIENT_ID")
-
-# Remove NA
-survial_sig <- survial_sig[!survial_sig$OS_MONTHS == "[Not Available]", ]
-survial_sig <- survial_sig[!is.na(survial_sig$hmf_down), ]
-survial_sig <- survial_sig[!is.na(survial_sig$tmb_group), ]
-
-# Reannotate stage variable 
-survial_sig <- survial_sig %>%
-  mutate(stage = case_when(
-    AJCC_PATHOLOGIC_TUMOR_STAGE %in% c("Stage ", "Stage IA", "Stage IB",
-    "Stage II", "Stage IIA", "Stage IIB", "Stage IIC") ~ "I_II",
-    AJCC_PATHOLOGIC_TUMOR_STAGE %in% c("Stage III", "Stage IIIA",
-    "Stage IIIB", "Stage IIIC", "Stage IV") ~ "III_IV",
-    TRUE ~ NA_character_  # Assign NA to any unmatched values for safety
-  ))
-
-# Fit Cox Model
-survial_sig$tmb_group <- relevel(as.factor(survial_sig$tmb_group), ref = "Low")
-
-cox_model <- coxph(Surv(time = as.numeric(survial_sig$OS_MONTHS),
-  event = survial_sig$OS_STATUS == "1:DECEASED") ~ stage + tmb_group + hmf_down, data = survial_sig)
-summary(cox_model)
-
 # PLOT
-colors <- pal_npg()(10)[6:7]
-
 p1 <- ggscatter(combined_sig, x = "hmf_up", y = "hmf_down",
           add = "reg.line",
           conf.int = TRUE,
@@ -153,19 +117,22 @@ p1 <- ggscatter(combined_sig, x = "hmf_up", y = "hmf_down",
           color = pal_npg()(4)[4],
           add.params = list(color = "red",
                             fill = "lightgray"),
-          size = 1.1,
+          size = 0.9,
           alpha = 0.6,
           title = "TCGA",
           xlab = "AR Expression",
-          ylab = "NF Expression")
+          ylab = "DR Expression")
 
-p2 <- plot_boxplot(sample_meta_tmb, x_var = "tmb_group", y_var = "hmf_up",
-  y_label = "Exp of DR signature", comparisons = NULL,
-  x_labels = c("High", "Low"), color_pal = colors)
+# Get comparisons 
+comp <- combn(levels(as.factor(sample_meta_sig$tmb_group)), 2, simplify = FALSE)
+
+# order 
+p2 <- plot_boxplot(sample_meta_sig, x_var = "tmb_group", y_var = "hmf_up", alpha = 0.8,
+  y_label = "Exp of DR signature", x_label = "TMB", comparisons = comp, color_pal = rev(pal_frontiers()(10)[c(3,1)]))
 
 clone_counts_sig$clones <- as.factor(clone_counts_sig$clones)
 p3 <- ggplot(clone_counts_sig, aes(x = clones, y = hmf_up, color = clones)) +
-  geom_point(position = position_jitter(width = 0.1), alpha = 0.5) +
+  geom_point(position = position_jitter(width = 0.1), alpha = 0.5, na.rm = T) +
   theme_classic() +
   ylab("Mean Exp NF signature") +
   theme(legend.position = "none") +
@@ -173,14 +140,14 @@ p3 <- ggplot(clone_counts_sig, aes(x = clones, y = hmf_up, color = clones)) +
     geom = "crossbar",
     fun.y = "median",
     col = "black",
-    size = 0.3, width = 0.35
+    size = 0.3, width = 0.35, na.rm = T
   ) +
   scale_color_npg() +
   annotate("text", x = Inf, y = Inf, label = paste("Spearman's rho =", round(rho, 2),
   "\np-value =", format.pval(p_value, digits = 2)), 
   hjust = 1.7, vjust = 1.1, size = 4, color = "black")
 
-pdf("analysis/output/figures/tcga_cancer_analysis.pdf", onefile = TRUE)
+pdf("analysis/output/figures/tcga_cancer_analysis.pdf", onefile = TRUE, height = 3, width = 3)
 p1
 p2
 p3

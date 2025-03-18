@@ -8,12 +8,13 @@
 library(DESeq2); library(tidyverse); library(msigdbr); library(fgsea); library(pheatmap)
 library(RColorBrewer); library(readxl); library(writexl); library(ggpubr);library(ggsci)
 library(biomaRt);library(openxlsx)
+
 source("src/custom_plots.R")
 source("src/analysis_functions.R")
 
 # Load counts + meta
 counts <- readRDS("insert_path") ## available from the HMF. 
-meta_data <- readRDS("data/meta/meta_data.Rds")
+meta_data <- readRDS("insert_path") ## available from the HMF.
 
 # Overlap counts and meta and remove non-assigned samples
 meta_data <- meta_data[rownames(meta_data) %in% colnames(counts), ] 
