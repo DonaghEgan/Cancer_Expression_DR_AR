@@ -8,13 +8,13 @@
 library(Seurat);library(limma);library(fgsea);library(tidyverse);library(ggsci)
 library(ggpubr);library(msigdbr);library(ggpubr);library(readxl);library(sjPlot)
 library(sjmisc);library(interactions)
+
 source("src/data_download.R")
 source("src/analysis_functions.R")
 
 # Load differentially expressed genes
-deg_hmf <- readRDS("data/processed/hmf_deseq_purity_nf_aq_deg.Rds")
+deg_hmf <- readRDS("analysis/output/results_data/hmf_deseq_purity_nf_aq_deg.Rds")
 hmf_up <- deg_hmf[deg_hmf$padj < 0.1 & deg_hmf$log2FoldChange > 0,] # DR
-hmf_down <- deg_hmf[deg_hmf$padj < 0.1 & deg_hmf$log2FoldChange < 0,] # AR
 
 # Immune system genes -> reactome
 immune_genes <- qusage::read.gmt("data/processed/REACTOME_IMMUNE_SYSTEM.v2024.1.Hs.gmt")
@@ -123,6 +123,19 @@ results$FDR <- p.adjust(results$p_value, method = "BH")
 plot_results <- results %>% arrange(estimate) %>% dplyr::slice(c(1:3, (n()-2):n()))
 plot_results$label <- ifelse(plot_results$FDR < 0.05, "0.05", "non_sig")
 
+# Create the barplot
+pdf("analysis/output/figures/cor_cancer_tcell.pdf", height = 2.5, width = 3.5)
+ggplot(plot_results, aes(x = reorder(column, estimate), y = estimate, fill = label)) +
+  geom_bar(stat = "identity", width = 0.6) +  
+  labs(title = "Correlation Estimates",
+       x = "Gene",
+       y = "Correlation Coefficient") +
+  theme_classic() + coord_flip() +
+  scale_fill_manual(values = c("#33A02C", "grey")) +
+  theme(axis.text.x = element_text(hjust = 1))
+dev.off()
+
+
 #-------------------------------------------------------------------------------
 # Analyze HMF genes in cancer cells and the relationship with MHCII:IFNG
 #-------------------------------------------------------------------------------
@@ -149,16 +162,23 @@ cancer_cell_score <- AddModuleScore(
   name = "path_Score"  
 )
 
-# Calculate ratios using residuals
+# Calculate relative contributions using residuals
 cancer_cell_score@meta.data$ratio_mhc_ifng <- residuals(lm(path_Score1 ~ path_Score2,
                                                            cancer_cell_score@meta.data))
 
 cancer_cell_score@meta.data$ratio_mitf_axl <- residuals(lm(path_Score4 ~ path_Score5,
                                                            cancer_cell_score@meta.data))
 
+# Rename column for plotting                                                        
+colnames(cancer_cell_score@meta.data)[20] <- "DR_sig"
+
 # fit linear model - predict ratio mhc:ifng with mitf as predictor and dr sig as
 # interaction term
-lm_cancer <- lm(ratio_mhc_ifng ~ ratio_mitf_axl*path_Score3, data = cancer_cell_score@meta.data)
+lm_cancer <- lm(ratio_mhc_ifng ~ ratio_mitf_axl*DR_sig, data = cancer_cell_score@meta.data)
 summary(lm_cancer)
 
-
+pdf("analysis/output/figures/ratio_mhc_ifng_diff.pdf", height = 2.5, width = 3.5)
+interact_plot(model = lm_cancer, pred = ratio_mitf_axl, modx = DR_sig, line.thickness = 0.5,
+plot.points = T, point.size = 0.8, point.alpha = 0.08) +
+  theme_classic() + xlab("MITF:AXL") + ylab("MHC CLASS II:IFNG")
+dev.off()
