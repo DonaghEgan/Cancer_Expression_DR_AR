@@ -32,8 +32,8 @@ tryCatch({
 set.seed(123)
 
 # Load counts and meta
-counts <- readRDS("Z:/working/GEL_MELANOMA/External_Datasets/NKI_OpACIN/WORKING/OUTPUTS/counts.Rds")
-meta_data <- read_csv("Z:/working/GEL_MELANOMA/External_Datasets/NKI_OpACIN/WORKING/OUTPUTS/meta_dataBS.csv")
+counts <- readRDS("counts.Rds")
+meta_data <- read_csv("meta_data")
 colnames(meta_data)
 
 # available from source publication
