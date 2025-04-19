@@ -10,10 +10,10 @@ library(tidyverse)
 library(ggpubr)     
 library(readxl)      
 library(reshape2)    
-
+library(ggpubr)
 # Define input and output directories (relative paths for portability)
-input_dir <- "data/processed/"
-output_dir <- "output/figures/"
+input_dir <- "data/processed"
+output_dir <- "analysis/output/figures"
 
 # Load purified population data
 baegev_sig <- read_xlsx(file.path(input_dir, "bagaev_cell_exp.xlsx"), skip = 1)
@@ -22,8 +22,8 @@ baegev_sig <- read_xlsx(file.path(input_dir, "bagaev_cell_exp.xlsx"), skip = 1)
 baegev_sig <- na.omit(baegev_sig) %>% column_to_rownames("Gene")
 
 # Load differential expression results
-purity_model_deseq <- readRDS(file.path(output_dir, "hmf_deseq_purity_res_nonres_deg.Rds"))
-standard_model_deseq <- readRDS(file.path(output_dir, "hmf_deseq_standard_res_nonres_deg.Rds"))
+purity_model_deseq <- readRDS("analysis/output/results_data/hmf_deseq_purity_res_nonres_deg.Rds")
+standard_model_deseq <- readRDS("analysis/output/results_data/hmf_deseq_standard_res_nonres_deg.Rds")
 
 # Select significant genes (adjusted p-value < 0.1)
 pur_sig <- purity_model_deseq[purity_model_deseq$padj < 0.1, ]
