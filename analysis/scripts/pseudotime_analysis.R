@@ -21,7 +21,7 @@ library(msigdbr)
 pal_custom <- c(pal_nejm()(8), pal_npg()(10))
 
 # load seurat object
-seurat_obj <- readRDS("/mnt/8TB/Projects/POIAZ/Donagh/jc_marine/Malignant_cells.rds")
+seurat_obj <- readRDS("Malignant_cells.rds") # https://doi.org/10.48804/GSAXBN
 
 # select pre treatment only
 seurat_obj <- subset(seurat_obj, subset = Timepoint == "BT")
@@ -188,7 +188,7 @@ combined_plot <- (p3 + p5 + p4) +
   plot_layout(guides = "collect") & 
   theme(legend.position = "bottom")  
 
-pdf("/mnt/8TB/Projects/POIAZ/Donagh/jc_marine/signatures_pseudo_plots.pdf", height = 2.8, width = 4.3)
+pdf("signatures_pseudo_plots.pdf", height = 2.8, width = 4.3)
 combined_plot
 dev.off()
 
